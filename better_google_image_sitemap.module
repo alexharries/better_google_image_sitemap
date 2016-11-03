@@ -1,0 +1,190 @@
+<?php
+
+/**
+ * @file
+ * A better implementation of the Google Images Sitemap specification.
+ *
+ * @see
+ *   https://support.google.com/webmasters/answer/178636?hl=en
+ */
+
+/**
+ * Load in the .inc files.
+ *
+ * We do this outside of a Drupal bootstrap so the functions in that file are
+ * available as early as possible.
+ */
+include_once 'better_google_image_sitemap.functions.inc';
+
+/**
+ * Implements hook_init().
+ */
+function better_google_image_sitemap_init() {
+}
+
+/**
+ * Implements hook_permission().
+ */
+function better_google_image_sitemap_permission() {
+  $permissions['administer better google image sitemap'] = array(
+    'title' => t('Administer settings for Google Image Sitemap.'),
+  );
+
+  return $permissions;
+}
+
+/**
+ * Implements hook_menu().
+ *
+ * Provides the administration pages for Better Google Image Sitemap, and the
+ * /images-sitemap.xml URL.
+ */
+function better_google_image_sitemap_menu() {
+  $items = array();
+
+  $items[BETTER_GOOGLE_IMAGE_SITEMAP_SITEMAP_PATH] = array(
+    'title' => 'Google Image Sitemap',
+    'description' => 'View the image sitemap for this site.',
+    'page callback' => 'better_google_image_sitemap_view_sitemap',
+    'access callback' => TRUE,
+  );
+
+  $items[BETTER_GOOGLE_IMAGE_SITEMAP_ADMIN_PATH] = array(
+    'title' => 'Better Google Image Sitemap',
+    'description' => 'Configure the Google Image Sitemap for this site.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('better_google_image_sitemap_settings'),
+    'access arguments' => array('administer better google image sitemap'),
+  );
+
+  $items[BETTER_GOOGLE_IMAGE_SITEMAP_ADMIN_PATH . '/settings'] = array(
+    'title' => 'Settings',
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'weight' => -5,
+  );
+
+  // Create a status page which is a form with four or five buttons which allows
+  // us to manually call the individual steps in cron, and a sixth which lets us
+  // do the whole cron update process in one step.
+  $items[BETTER_GOOGLE_IMAGE_SITEMAP_ADMIN_PATH . '/status'] = array(
+    'title' => 'Status',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('better_google_image_sitemap_status_form'),
+    'access arguments' => array('administer better google image sitemap'),
+    'type' => MENU_LOCAL_ACTION,
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_cron().
+ *
+ * Updates the index of images which are linked to nodes and builds sitemaps.
+ *
+ * @see better_google_image_sitemap_find_new_nodes_to_index()
+ * @see better_google_image_sitemap_remove_deleted_nodes()
+ * @see better_google_image_sitemap_index_images()
+ * @see better_google_image_sitemap_generate_sitemaps()
+ */
+function better_google_image_sitemap_cron() {
+  // Start a timer.
+  $time_start = microtime(TRUE);
+
+  // Get the time limit in seconds.
+  $time_limit = variable_get('better_google_image_sitemap_settings_cron_max_execution_time', 30);
+
+  // Initialise the time limit variables.
+  $indexing_max_time = $sitemap_generation_max_time = NULL;
+
+  if ($time_limit > 0) {
+    // Indexing maximum time.
+    $indexing_max_time = $time_start + ($time_limit * 0.5);
+
+    // Sitemap generation max time.
+    $sitemap_generation_max_time = $time_start + $time_limit;
+  }
+
+  // BETTER_GOOGLE_IMAGE_SITEMAP_INDEX_IMAGES
+  $indexed_images = 0;
+  foreach (language_list() as $language_id => $language) {
+    $indexed_images += better_google_image_sitemap_index_images($language_id, $indexing_max_time);
+  }
+
+  // BETTER_GOOGLE_IMAGE_SITEMAP_GENERATE_SITEMAPS
+  $sitemaps_generated = better_google_image_sitemap_generate_sitemaps($sitemap_generation_max_time);
+
+  // Submit to search engines if configured to do so.
+  $successful_submissions = 0;
+  if (variable_get('better_google_image_sitemap_settings_submit_on_cron',
+    BETTER_GOOGLE_IMAGE_SITEMAP_SUBMIT_ON_CRON_BY_DEFAULT)) {
+    $successful_submissions = better_google_image_sitemap_submit_sitemaps();
+  }
+
+  $elapsed_time = (int) (ceil(microtime(TRUE) - $time_start));
+
+  // Log to watchdog so we can see what's occurrin'.
+  $message_text = 'Better Google Image Sitemap ran for @elapsed_time. Indexed @indexed_count images. Generated @sitemaps_generated sitemaps. Successfully submitted @successful_submissions sitemaps to search engines.';
+  $message_variables = array(
+    '@elapsed_time' => $elapsed_time,
+    '@indexed_count' => $indexed_images,
+    '@sitemaps_generated' => $sitemaps_generated,
+    '@successful_submissions' => $successful_submissions,
+  );
+
+  watchdog('Better Google Image Sitemap', $message_text, $message_variables);
+}
+
+/**
+ * Implements hook_theme().
+ *
+ * Defines theme functions for generating a sitemap.
+ *
+ * @param array $existing
+ *   An array of existing implementations that may be used for override
+ *   purposes.
+ *
+ * @param string $type
+ *   Whether a theme, module, etc. is being processed.
+ *
+ * @param string $theme
+ *   The actual name of theme, module, etc. that is being being processed.
+ *
+ * @param string $path
+ *   The directory path of the theme or module, so that it doesn't need to be
+ *   looked up.
+ *
+ * @return array
+ *   An array of theme implementations.
+ */
+function better_google_image_sitemap_theme($existing, $type, $theme, $path) {
+  return array(
+    // Theme definition to render a single image in a sitemap.
+    'better_google_image_sitemap_image' => array(
+      'template' => 'image-sitemap-image',
+      'path' => $path . '/templates',
+      'variables' => array(
+        'image' => NULL,
+      ),
+    ),
+
+    // Theme definition for a single Drupal node's entry in the sitemap.
+    'better_google_image_sitemap_node' => array(
+      'template' => 'image-sitemap-node',
+      'path' => $path . '/templates',
+      'variables' => array(
+        'node' => NULL,
+      ),
+    ),
+
+    // Theme definition to render a whole sitemap.
+    'better_google_image_sitemap_sitemap' => array(
+      'template' => 'image-sitemap',
+      'path' => $path . '/templates',
+      'variables' => array(
+        'xml_header' => BETTER_GOOGLE_IMAGE_SITEMAP_XML_HEADER,
+        'nodes' => NULL,
+      ),
+    ),
+  );
+}

@@ -1,0 +1,197 @@
+<?php
+/**
+ * @file
+ * Install, update and uninstall functions for the google_image_sitemap module
+ */
+
+/**
+ * Implements hook_install().
+ */
+function better_google_image_sitemap_install() {
+  variable_set('better_google_image_sitemap_settings_cron_max_execution_time', 30);
+  variable_set('better_google_image_sitemap_settings_include_new_content_types_by_default', TRUE);
+  variable_set('better_google_image_sitemap_settings_image_license_url', '');
+  variable_set('better_google_image_sitemap_settings_language_und', array());
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function better_google_image_sitemap_uninstall() {
+  variable_del('better_google_image_sitemap_settings_cron_max_execution_time');
+  variable_del('better_google_image_sitemap_settings_include_new_content_types_by_default');
+  variable_del('better_google_image_sitemap_settings_image_license_url');
+  variable_del('better_google_image_sitemap_settings_language_und');
+}
+
+/**
+ * Implements hook_schema().
+ *
+ * This module provides the following schemae (is that the right word for more
+ * than one schema?).
+ *
+ * - better_google_image_sitemap_images - tracks images which have been indexed.
+ *   We try to store as much information which needs calculating in this table
+ *   in order to make the process of building the actual image sitemap as
+ *   performant as possible.
+ *
+ *   Columns: file ID (unique, same as file table ID), node ID, node URL,
+ *   image URL, image title, image caption, image url, language, and image
+ *   license URL.
+ *   - fid*
+ *   - nid
+ *   - node_url
+ *   - image_title
+ *   - image_caption
+ *   - language
+ *   - image_license_url
+ *   - image_url
+ *
+ * - better_google_image_sitemap_sitemaps - contains the fully-rendered
+ *   sitemap's XML for a language.
+ *
+ *   Columns: language, last rebuild timestamp, whether a re-build is needed
+ *   (boolean), and the generated XML chunk.
+ *   - language*
+ *   - updated
+ *   - rebuild_needed
+ *   - xml
+ */
+function better_google_image_sitemap_schema() {
+  $schema = array();
+
+  // Better_google_image_sitemap_images - tracks images which have been indexed.
+  $schema['better_google_image_sitemap_images'] = array(
+    'description' => 'A list of the images attached to nodes which have been indexed by the Flight Centre Google Image Sitemap module.',
+    'fields' => array(
+      'id' => array(
+        'description' => '',
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'fid' => array(
+        'description' => '',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'nid' => array(
+        'description' => 'The node ID to which the file is attached.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'node_url' => array(
+        'description' => 'An absolute URL to the node in which the image appears.',
+        'type' => 'varchar',
+        'length' => 1024,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'image_title' => array(
+        'description' => 'The title of the image.',
+        'type' => 'varchar',
+        'length' => 2048,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'image_caption' => array(
+        'description' => 'The image caption.',
+        'type' => 'varchar',
+        'length' => 2048,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'language' => array(
+        'description' => 'The language code of the node to which this image is attached.',
+        'type' => 'varchar',
+        'length' => 8,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'image_license_url' => array(
+        'description' => 'The URL of the license text for this image.',
+        'type' => 'varchar',
+        'length' => 1024,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'image_url' => array(
+        'description' => 'An absolute URL to the image file, accessible to search crawlers.',
+        'type' => 'varchar',
+        'length' => 1024,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'updated' => array(
+        'description' => 'The Unix epoch timestamp when the image was last indexed.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+    ),
+    'indexes' => array(
+      'id' => array('id'),
+      'fid' => array('fid'),
+      'nid' => array('nid'),
+    ),
+    'unique keys' => array(
+      'language_nid_fid' => array('language', 'nid', 'fid'),
+    ),
+    'primary key' => array('id'),
+    'foreign keys' => array(
+      'node' => array(
+        'table' => 'node',
+        'columns' => array('nid' => 'nid'),
+      ),
+      'file_managed' => array(
+        'table' => 'file_managed',
+        'columns' => array('fid' => 'fid'),
+      ),
+    ),
+  );
+
+  // Better_google_image_sitemap_sitemaps - contains the fully-rendered
+  // sitemap's XML for a language.
+  $schema['better_google_image_sitemap_sitemaps'] = array(
+    'description' => 'Contains the fully-rendered sitemap\'s XML for a particular language.',
+    'fields' => array(
+      'language' => array(
+        'description' => 'The language code of the sitemap.',
+        'type' => 'varchar',
+        'length' => 8,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'updated' => array(
+        'description' => 'The Unix epoch timestamp when the sitemap was last built.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'rebuild_needed' => array(
+        'description' => 'Whether the sitemap requires re-building (in which case this field will be set to boolean TRUE).',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'default' => 0,
+      ),
+      'xml' => array(
+        'description' => 'The XML chunk containing a complete sitemap, minus headers.',
+        'type' => 'text',
+        'not null' => TRUE,
+        'size' => 'big',
+      ),
+    ),
+    'indexes' => array(
+      'language' => array('language'),
+      'updated' => array('updated'),
+      'rebuild_needed' => array('rebuild_needed'),
+    ),
+    'primary key' => array('language'),
+  );
+
+  return $schema;
+}

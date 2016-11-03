@@ -1,0 +1,7 @@
+name = A Better Google Image Sitemaps
+description = Allows the creation of a sitemap containing a list of images used in content throughout the site. For more information, take a look at https://support.google.com/webmasters/answer/178636?hl=en.
+core = 7.x
+configure = admin/config/search/image-sitemap
+version = "7.x-1.0-20161020"
+core = "7.x"
+project = "better_google_image_sitemap"
